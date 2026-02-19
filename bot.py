@@ -1,38 +1,46 @@
 import os
 import asyncio
-from aiogram import Bot, Dispatcher, F
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+import threading
+from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
-# Отримуємо змінні з налаштувань Render
+# --- СЕКЦІЯ ДЛЯ RENDER (ЩОБ НЕ БУЛО TIMEOUT) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_health_check():
+    port = int(os.getenv("PORT", 8080))
+    server = ThreadingHTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+# ----------------------------------------------
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
 
-# Новий спосіб ініціалізації бота для aiogram 3.7+
-# Це виправить помилку TypeError, яку ви бачили в логах
-bot = Bot(
-    token=BOT_TOKEN, 
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("👋 Привіт! Надішли своє повідомлення і я передам його в групу.")
-    
+    await message.answer("👋 Привіт! Я працюю.")
+
 @dp.message()
 async def forward_to_group(message: Message):
     if message.text:
-        await message.answer("✅ Ваше повідомлення надіслано адміністратору.")
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            text=f"📩 **Повідомлення від {message.from_user.full_name}** (@{message.from_user.username}):\n\n{message.text}"
-        )
+        await bot.send_message(GROUP_ID, f"📩 Від {message.from_user.full_name}:\n\n{message.text}")
+        await message.answer("✅ Надіслано!")
 
 async def main():
-    # Очищуємо чергу повідомлень, щоб бот не спамив при запуску
+    # Запускаємо веб-сервер у окремому потоці
+    threading.Thread(target=run_health_check, daemon=True).start()
+    
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

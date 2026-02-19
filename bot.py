@@ -3,7 +3,7 @@ import asyncio
 import threading
 import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode, ChatMemberStatus
@@ -24,9 +24,8 @@ def run_health_check():
 # --- НАЛАШТУВАННЯ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-COOLDOWN_SECONDS = 30 * 60  # Зменшено до 30 хвилин (1800 секунд)
+COOLDOWN_SECONDS = 30 * 60  # 30 хвилин
 
-# Словник для кд: {user_id: timestamp}
 user_cooldowns = {}
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -34,18 +33,15 @@ dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("👋 Привіт! Надішли повідомлення, і я передам його в групу **анонімно**.\n\n"
+    await message.answer("👋 Привіт! Надішли мені **текст, фото або відео**, і я передам їх у групу анонімно.\n\n"
                          "⚠️ Обмеження: 1 повідомлення на 30 хвилин (крім адмінів).")
 
-@dp.message()
-async def forward_to_group(message: Message):
-    if not message.text:
-        return
-
+@dp.message(F.text | F.photo | F.video)
+async def handle_anonymous_message(message: Message):
     user_id = message.from_user.id
     current_time = time.time()
 
-    # ПЕРЕВІРКА НА АДМІНІСТРАТОРА
+    # Перевірка на адміністратора
     is_admin = False
     try:
         member = await bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
@@ -54,23 +50,31 @@ async def forward_to_group(message: Message):
     except Exception:
         is_admin = False
 
-    # Перевірка кд (тільки якщо НЕ адмін)
+    # Перевірка кд
     if not is_admin and user_id in user_cooldowns:
         last_time = user_cooldowns[user_id]
         time_passed = current_time - last_time
-
         if time_passed < COOLDOWN_SECONDS:
             remaining_time = int((COOLDOWN_SECONDS - time_passed) / 60)
-            await message.answer(f"⏳ Зачекайте ще **{remaining_time} хв.** перед наступним відправленням.")
+            await message.answer(f"⏳ Зачекайте ще **{remaining_time} хв.**")
             return
 
-    # Відправка повідомлення
     try:
-        await bot.send_message(
-            chat_id=GROUP_ID,
-            text=f"📩 **Нове анонімне повідомлення:**\n\n{message.text}"
-        )
-        # Оновлюємо час тільки для звичайних користувачів
+        caption_text = f"📩 **Нове анонімне повідомлення:**"
+        if message.caption:
+            caption_text += f"\n\n{message.caption}"
+        elif message.text:
+            caption_text += f"\n\n{message.text}"
+
+        # Пересилка залежно від типу контенту
+        if message.photo:
+            await bot.send_photo(chat_id=GROUP_ID, photo=message.photo[-1].file_id, caption=caption_text)
+        elif message.video:
+            await bot.send_video(chat_id=GROUP_ID, video=message.video.file_id, caption=caption_text)
+        elif message.text:
+            await bot.send_message(chat_id=GROUP_ID, text=caption_text)
+
+        # Оновлення кд
         if not is_admin:
             user_cooldowns[user_id] = current_time
             

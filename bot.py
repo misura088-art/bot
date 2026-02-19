@@ -29,14 +29,12 @@ COOLDOWN_SECONDS = 30 * 60
 
 user_cooldowns = {}
 total_messages = 0
-waiting_for_id = {}
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Список для ігнорування та видалення з чату
+# Список назв кнопок
 MENU_BUTTONS = ["📝 Надіслати анонімку", "📊 Статистика", "🛠 Адмін-панель", "✨ Підбадьори мене", "📜 Правила", "⏳ Мій час", "🔓 Зняти КД", "🔙 Головне меню"]
-
 MOTIVATION = ["Ти неймовірний! ✨", "Твоя історія змінить чийсь день! 😊", "Не бійся бути собою! 🌈", "Ми чекаємо на твої думки! ✍️"]
 
 # --- KEYBOARDS ---
@@ -56,11 +54,9 @@ def get_cooldown_users_menu():
     for uid, last_time in list(user_cooldowns.items()):
         if current_time - last_time < COOLDOWN_SECONDS:
             buttons.append([KeyboardButton(text=f"Розблокувати {uid}")])
-    
     buttons.append([KeyboardButton(text="🔙 Головне меню")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
-# --- UTILS ---
 async def check_is_admin(user_id):
     try:
         member = await bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
@@ -69,13 +65,16 @@ async def check_is_admin(user_id):
 
 # --- HANDLERS ---
 
-# 1. ЗАХИСТ ГРУПИ
-@dp.message(F.chat.id == GROUP_ID, F.text.in_(MENU_BUTTONS))
-async def delete_spam_in_group(message: Message):
-    try: await message.delete()
-    except: pass
+# 1. ЗАХИСТ ГРУПИ (ВИДАЛЯЄМО КНОПКИ, ЯКЩО ВОНИ ПРОСКОЧИЛИ)
+@dp.message(F.chat.id == GROUP_ID)
+async def group_filter(message: Message):
+    if message.text in MENU_BUTTONS or (message.text and message.text.startswith("Розблокувати ")):
+        try:
+            await message.delete()
+        except:
+            pass
 
-# 2. ОБРОБКА КОМАНД ТА КНОПОК (ПРИВАТ)
+# 2. ОБРОБКА МЕНЮ ТА КНОПОК (ПРИВАТ)
 @dp.message(F.chat.type == ChatType.PRIVATE, (F.text.in_(MENU_BUTTONS) | F.text.startswith("Розблокувати ") | F.text == "/start"))
 async def handle_menus(message: Message):
     global total_messages
@@ -116,10 +115,13 @@ async def handle_menus(message: Message):
             else: await message.answer("❌ Користувач уже не в КД.")
         except: await message.answer("❌ Помилка ID.")
 
-# 3. ПЕРЕСИЛАННЯ (АНОНІМКА)
+# 3. ПЕРЕСИЛАННЯ (АНОНІМКА) - ТУТ ДОДАНО ЖОРСТКИЙ ФІЛЬТР
 @dp.message(F.chat.type == ChatType.PRIVATE)
 async def process_anonymous(message: Message):
-    # Ігноруємо порожні повідомлення або команди, що пройшли повз фільтр
+    # ЯКЩО ЦЕ КНОПКА - ІГНОРУЄМО (ЩОБ НЕ ПРОСКОЧИЛА)
+    if message.text in MENU_BUTTONS or (message.text and message.text.startswith("Розблокувати ")):
+        return
+
     if not (message.text or message.photo or message.video or message.voice): return
     
     user_id = message.from_user.id
@@ -147,7 +149,8 @@ async def process_anonymous(message: Message):
         total_messages += 1
         if not is_admin: user_cooldowns[user_id] = time.time()
         await message.answer("✅ Надіслано анонімно!")
-    except: await message.answer("❌ Помилка відправки. Перевір, чи є бот у групі.")
+    except Exception as e:
+        await message.answer("❌ Помилка відправки. Перевір права бота в групі.")
 
 async def main():
     threading.Thread(target=run_health_check, daemon=True).start()

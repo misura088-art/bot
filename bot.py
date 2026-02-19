@@ -4,7 +4,7 @@ import threading
 import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.client.default import DefaultBotProperties
@@ -31,56 +31,95 @@ user_cooldowns = {}
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# --- МЕНЮ (КНОПКИ) ---
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📝 Надіслати анонімку")],
+        [KeyboardButton(text="📜 Правила"), KeyboardButton(text="⏳ Мій час")]
+    ],
+    resize_keyboard=True
+)
+
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("👋 Привіт! Надішли мені **текст, фото або відео**, і я передам їх у групу анонімно.\n\n"
-                         "⚠️ Обмеження: 1 повідомлення на 30 хвилин (крім адмінів).")
+    await message.answer(
+        f"👋 Вітаємо у боті <b>Підслухано</b>!\n\n"
+        f"Тут ти можеш поділитися своєю історією абсолютно анонімно.\n"
+        f"Просто надішліть текст, фото, відео або голосове.",
+        reply_markup=main_menu
+    )
 
-@dp.message(F.text | F.photo | F.video)
+@dp.message(F.text == "📜 Правила")
+async def rules(message: Message):
+    await message.answer(
+        "<b>Наші правила:</b>\n"
+        "1. Без прямої образи особистості.\n"
+        "2. Без реклами та спаму.\n"
+        "3. Одне повідомлення на 30 хвилин.\n\n"
+        "Всі повідомлення проходять модерацію!"
+    )
+
+@dp.message(F.text == "⏳ Мій час")
+async def check_time(message: Message):
+    user_id = message.from_user.id
+    if user_id in user_cooldowns:
+        time_passed = time.time() - user_cooldowns[user_id]
+        if time_passed < COOLDOWN_SECONDS:
+            rem = int((COOLDOWN_SECONDS - time_passed) / 60)
+            await message.answer(f"⏳ Тобі потрібно зачекати ще <b>{rem} хв.</b>")
+            return
+    await message.answer("✅ Ти можеш надсилати повідомлення прямо зараз!")
+
+@dp.message(F.text == "📝 Надіслати анонімку")
+async def send_info(message: Message):
+    await message.answer("Просто надішли мені те, чим хочеш поділитися (текст, фото або відео).")
+
+@dp.message(F.text | F.photo | F.video | F.voice)
 async def handle_anonymous_message(message: Message):
+    # Ігноруємо кнопки меню
+    if message.text in ["📝 Надіслати анонімку", "📜 Правила", "⏳ Мій час"]:
+        return
+
     user_id = message.from_user.id
     current_time = time.time()
 
-    # Перевірка на адміністратора
+    # Перевірка на адміна
     is_admin = False
     try:
         member = await bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
         if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
             is_admin = True
-    except Exception:
+    except:
         is_admin = False
 
-    # Перевірка кд
+    # Перевірка КД
     if not is_admin and user_id in user_cooldowns:
-        last_time = user_cooldowns[user_id]
-        time_passed = current_time - last_time
-        if time_passed < COOLDOWN_SECONDS:
-            remaining_time = int((COOLDOWN_SECONDS - time_passed) / 60)
-            await message.answer(f"⏳ Зачекайте ще **{remaining_time} хв.**")
+        if current_time - user_cooldowns[user_id] < COOLDOWN_SECONDS:
+            rem = int((COOLDOWN_SECONDS - (current_time - user_cooldowns[user_id])) / 60)
+            await message.answer(f"⏳ Почекай ще {rem} хв.")
             return
 
     try:
-        caption_text = f"📩 **Нове анонімне повідомлення:**"
-        if message.caption:
-            caption_text += f"\n\n{message.caption}"
-        elif message.text:
-            caption_text += f"\n\n{message.text}"
+        caption = "📩 <b>Нове анонімне повідомлення:</b>"
+        if message.caption: caption += f"\n\n{message.caption}"
+        elif message.text: caption += f"\n\n{message.text}"
 
-        # Пересилка залежно від типу контенту
         if message.photo:
-            await bot.send_photo(chat_id=GROUP_ID, photo=message.photo[-1].file_id, caption=caption_text)
+            await bot.send_photo(GROUP_ID, message.photo[-1].file_id, caption=caption)
         elif message.video:
-            await bot.send_video(chat_id=GROUP_ID, video=message.video.file_id, caption=caption_text)
+            await bot.send_video(GROUP_ID, message.video.file_id, caption=caption)
+        elif message.voice:
+            await bot.send_message(GROUP_ID, "📩 <b>Анонімне голосове повідомлення:</b>")
+            await bot.send_voice(GROUP_ID, message.voice.file_id)
         elif message.text:
-            await bot.send_message(chat_id=GROUP_ID, text=caption_text)
+            await bot.send_message(GROUP_ID, caption)
 
-        # Оновлення кд
         if not is_admin:
             user_cooldowns[user_id] = current_time
-            
-        await message.answer("✅ Ваше повідомлення надіслано анонімно.")
+        await message.answer("✅ Надіслано анонімно!", reply_markup=main_menu)
+        
     except Exception as e:
-        await message.answer("❌ Помилка при відправці. Переконайтеся, що бот є в групі.")
+        await message.answer("❌ Помилка. Можливо, бот не в групі.")
 
 async def main():
     threading.Thread(target=run_health_check, daemon=True).start()

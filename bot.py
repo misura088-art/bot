@@ -2,7 +2,6 @@ import os
 import asyncio
 import threading
 import time
-import random
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
@@ -10,7 +9,7 @@ from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode, ChatMemberStatus, ChatType
 from aiogram.client.default import DefaultBotProperties
 
-# --- СЕКЦІЯ RENDER (HEALTH CHECK) ---
+# --- HEALTH CHECK FOR RENDER ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -22,128 +21,114 @@ def run_health_check():
     server = ThreadingHTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# --- НАЛАШТУВАННЯ ---
+# --- CONFIG ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
-COOLDOWN_SECONDS = 30 * 60 
+COOLDOWN_SECONDS = 1800 
 
 user_cooldowns = {}
-total_messages = 0
+waiting_for_id = {} # Для ручного введення ID
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- КОНСТАНТИ КНОПОК (БЕЗ ЗАЙВИХ СИМВОЛІВ) ---
-B_SEND = "📝 Надіслати"
-B_STATS = "📊 Статистика"
-B_ADMIN = "🛠 Адмін"
-B_RULES = "📜 Правила"
-B_TIME = "⏳ Мій час"
-B_BACK = "🔙 Назад"
-B_UNBLOCK = "🔓 Зняти КД"
-
-ALL_MENU_BUTTONS = [B_SEND, B_STATS, B_ADMIN, B_RULES, B_TIME, B_BACK, B_UNBLOCK]
-
-# --- КЛАВІАТУРИ ---
+# --- KEYBOARDS ---
 def get_main_menu(is_admin=False):
     kb = [
-        [KeyboardButton(text=B_SEND)],
-        [KeyboardButton(text=B_TIME), KeyboardButton(text=B_STATS)],
-        [KeyboardButton(text=B_RULES)]
+        [KeyboardButton(text="📝 Надіслати анонімку")],
+        [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="⏳ Мій час")]
     ]
     if is_admin:
-        kb.append([KeyboardButton(text=B_ADMIN)])
+        kb.append([KeyboardButton(text="🛠 Адмін-панель")])
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-def get_cooldown_menu():
-    buttons = []
-    now = time.time()
-    for uid, l_time in list(user_cooldowns.items()):
-        if now - l_time < COOLDOWN_SECONDS:
-            buttons.append([KeyboardButton(text=f"Unlock:{uid}")])
-    buttons.append([KeyboardButton(text=B_BACK)])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-# --- ПЕРЕВІРКА АДМІНА ---
-async def check_is_admin(user_id):
+# --- UTILS ---
+async def check_admin(user_id):
     try:
-        member = await bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
-        return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
+        m = await bot.get_chat_member(GROUP_ID, user_id)
+        return m.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]
     except: return False
 
-# --- ОБРОБНИКИ ---
+# --- HANDLERS ---
 
-# 1. ВИДАЛЕННЯ КНОПОК У ГРУПІ (АНТИ-СПАМ)
-@dp.message(F.chat.id == GROUP_ID)
-async def group_guard(message: Message):
-    if message.text and (any(b in message.text for b in ALL_MENU_BUTTONS) or "Unlock:" in message.text):
-        try: await message.delete()
-        except: pass
+# 1. КОМАНДА СТАРТ
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    if message.chat.type != ChatType.PRIVATE: return
+    admin = await check_admin(message.from_user.id)
+    await message.answer("Привіт! Використовуй меню:", reply_markup=get_main_menu(admin))
 
-# 2. ОБРОБКА КОМАНД ТА КНОПОК (ПРИВАТ)
-@dp.message(F.chat.type == ChatType.PRIVATE, (F.text.in_(ALL_MENU_BUTTONS) | F.text.startswith("Unlock:") | CommandStart()))
-async def handle_private_menu(message: Message):
-    global total_messages
-    user_id = message.from_user.id
-    is_admin = await check_is_admin(user_id)
+# 2. ОБРОБКА КНОПОК МЕНЮ
+@dp.message(F.chat.type == ChatType.PRIVATE, F.text.in_(["📊 Статистика", "⏳ Мій час", "🛠 Адмін-панель", "🔙 Назад"]))
+async def menu_logic(message: Message):
+    uid = message.from_user.id
+    admin = await check_admin(uid)
 
-    if message.text == "/start" or message.text == B_BACK:
-        await message.answer("🏠 Головне меню:", reply_markup=get_main_menu(is_admin))
+    if message.text == "📊 Статистика":
+        await message.answer(f"Активних КД: {len(user_cooldowns)}")
     
-    elif message.text == B_STATS:
-        await message.answer(f"📈 Статистика:\nПовідомлень: {total_messages}\nВ КД: {len(user_cooldowns)}")
-    
-    elif message.text == B_TIME:
-        if user_id in user_cooldowns:
-            rem = int((COOLDOWN_SECONDS - (time.time() - user_cooldowns[user_id])) / 60)
-            if rem > 0: return await message.answer(f"⏳ Чекати ще {rem} хв.")
+    elif message.text == "⏳ Мій час":
+        if uid in user_cooldowns:
+            rem = int((COOLDOWN_SECONDS - (time.time() - user_cooldowns[uid])) / 60)
+            if rem > 0: return await message.answer(f"⏳ Зачекай {rem} хв.")
         await message.answer("✅ Можеш писати!")
 
-    elif message.text == B_ADMIN and is_admin:
-        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=B_UNBLOCK)], [KeyboardButton(text=B_BACK)]], resize_keyboard=True)
-        await message.answer("🔧 Адмін-панель:", reply_markup=kb)
+    elif message.text == "🛠 Адмін-панель" and admin:
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔓 Зняти КД")], [KeyboardButton(text="🔙 Назад")]], resize_keyboard=True)
+        await message.answer("Адмін-меню. Натисни кнопку нижче:", reply_markup=kb)
+    
+    elif message.text == "🔙 Назад":
+        await message.answer("Головне меню:", reply_markup=get_main_menu(admin))
 
-    elif message.text == B_UNBLOCK and is_admin:
-        menu = get_cooldown_menu()
-        await message.answer("Оберіть кого розблокувати:", reply_markup=menu)
+# 3. ЛОГІКА ЗНЯТТЯ КД (РУЧНЕ ВВЕДЕННЯ ID)
+@dp.message(F.chat.type == ChatType.PRIVATE, F.text == "🔓 Зняти КД")
+async def ask_id(message: Message):
+    if await check_admin(message.from_user.id):
+        waiting_for_id[message.from_user.id] = True
+        await message.answer("Надішліть ID користувача одним числом:")
 
-    elif message.text.startswith("Unlock:") and is_admin:
-        try:
-            tid = int(message.text.split(":")[1])
-            if tid in user_cooldowns:
-                del user_cooldowns[tid]
-                await message.answer(f"✅ {tid} розблоковано!", reply_markup=get_cooldown_menu())
-        except: await message.answer("Помилка.")
-
-# 3. АНОНІМКА (ТІЛЬКИ ЯКЩО ЦЕ НЕ КНОПКА)
+# 4. ПРИЙОМ ID ТА ПЕРЕСИЛАННЯ АНОНІМКИ
 @dp.message(F.chat.type == ChatType.PRIVATE)
-async def anonymous_sender(message: Message):
-    if message.text in ALL_MENU_BUTTONS: return # Жорсткий блок
+async def main_handler(message: Message):
+    uid = message.from_user.id
+    
+    # Якщо адмін вводить ID для розблокування
+    if uid in waiting_for_id:
+        try:
+            target = int(message.text)
+            if target in user_cooldowns: del user_cooldowns[target]
+            await message.answer(f"✅ Користувача {target} розблоковано.")
+        except: await message.answer("Введіть тільки цифри ID.")
+        del waiting_for_id[uid]
+        return
 
-    user_id = message.from_user.id
-    is_admin = await check_is_admin(user_id)
+    # Якщо це звичайна анонімка
+    if message.text == "📝 Надіслати анонімку":
+        return await message.answer("Просто напиши текст або надішли фото — я одразу перешлю!")
 
-    if not is_admin and user_id in user_cooldowns:
-        if time.time() - user_cooldowns[user_id] < COOLDOWN_SECONDS:
-            return await message.answer("⏳ Зачекай, КД!")
+    admin = await check_admin(uid)
+    if not admin and uid in user_cooldowns:
+        if time.time() - user_cooldowns[uid] < COOLDOWN_SECONDS:
+            return await message.answer("⏳ Рано! Зачекай.")
 
+    # Пересилання
     try:
-        tag = f'<a href="tg://user?id={user_id}">📍</a>'
-        header = f"📩 <b>Анонімно {tag}</b>\n\n"
+        tag = f'<a href="tg://user?id={uid}">📍</a>'
+        header = f"📩 <b>Анонімка {tag}</b>\n\n"
         
         if message.text:
             await bot.send_message(GROUP_ID, header + message.text)
         elif message.photo:
             await bot.send_photo(GROUP_ID, message.photo[-1].file_id, caption=header + (message.caption or ""))
         
-        total_messages += 1
-        if not is_admin: user_cooldowns[user_id] = time.time()
+        if not admin: user_cooldowns[uid] = time.time()
         await message.answer("✅ Надіслано!")
-    except: await message.answer("❌ Помилка.")
+    except:
+        await message.answer("Помилка відправки.")
 
 async def main():
     threading.Thread(target=run_health_check, daemon=True).start()
-    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.delete_webhook(drop_pending_updates=True) # Видаляє старий спам
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

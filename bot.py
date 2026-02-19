@@ -5,8 +5,8 @@ from aiogram.types import Message
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 
-BOT_TOKEN = os.getenv("8411217311:AAFqClO0q7BaYdi1mm0I2B_jfV8bL0WRbT8")  # Беремо значення з Render за назвою ключа
-GROUP_ID = os.getenv("-1003857226732")    # Беремо значення з Render за назвою ключа
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = os.getenv("GROUP_ID")
 
 bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher()
@@ -28,5 +28,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
 

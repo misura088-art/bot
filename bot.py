@@ -24,7 +24,7 @@ def run_health_check():
 # --- НАЛАШТУВАННЯ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-COOLDOWN_SECONDS = 2 * 60 * 60  # 2 години
+COOLDOWN_SECONDS = 30 * 60  # Зменшено до 30 хвилин (1800 секунд)
 
 # Словник для кд: {user_id: timestamp}
 user_cooldowns = {}
@@ -35,7 +35,7 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer("👋 Привіт! Надішли повідомлення, і я передам його в групу **анонімно**.\n\n"
-                         "⚠️ Обмеження: 1 повідомлення на 2 години (крім адмінів).")
+                         "⚠️ Обмеження: 1 повідомлення на 30 хвилин (крім адмінів).")
 
 @dp.message()
 async def forward_to_group(message: Message):
@@ -52,7 +52,6 @@ async def forward_to_group(message: Message):
         if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
             is_admin = True
     except Exception:
-        # Якщо бота немає в групі або він не може перевірити, вважаємо за замовчуванням False
         is_admin = False
 
     # Перевірка кд (тільки якщо НЕ адмін)

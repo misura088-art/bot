@@ -29,16 +29,20 @@ dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("👋 Привіт! Я працюю.")
+    await message.answer("👋 Привіт! Надішли своє повідомлення, і я передам його в групу **анонімно**.")
 
 @dp.message()
 async def forward_to_group(message: Message):
     if message.text:
-        await bot.send_message(GROUP_ID, f"📩 Від {message.from_user.full_name}:\n\n{message.text}")
-        await message.answer("✅ Надіслано!")
+        # Тепер тут немає імені та юзернейма відправника
+        await bot.send_message(
+            chat_id=GROUP_ID, 
+            text=f"📩 **Нове анонімне повідомлення:**\n\n{message.text}"
+        )
+        await message.answer("✅ Ваше повідомлення надіслано анонімно.")
 
 async def main():
-    # Запускаємо веб-сервер у окремому потоці
+    # Запускаємо веб-сервер у окремому потоці для Render
     threading.Thread(target=run_health_check, daemon=True).start()
     
     await bot.delete_webhook(drop_pending_updates=True)

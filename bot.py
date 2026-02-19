@@ -34,6 +34,29 @@ waiting_for_id = {}
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
+# Список назв кнопок для ігнорування при пересилці
+MENU_BUTTONS = [
+    "📝 Надіслати анонімку", 
+    "📊 Статистика", 
+    "🛠 Адмін-панель", 
+    "✨ Підбадьори мене", 
+    "📜 Правила", 
+    "⏳ Мій час",
+    "🔓 Зняти КД користувачу",
+    "🔙 Головне меню"
+]
+
+# --- КЛАВІАТУРИ ---
+def get_main_menu(is_admin=False):
+    buttons = [
+        [KeyboardButton(text="📝 Надіслати анонімку")],
+        [KeyboardButton(text="✨ Підбадьори мене"), KeyboardButton(text="📊 Статистика")],
+        [KeyboardButton(text="📜 Правила"), KeyboardButton(text="⏳ Мій час")]
+    ]
+    if is_admin:
+        buttons.append([KeyboardButton(text="🛠 Адмін-панель")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
 # --- ПЕРЕВІРКА АДМІНА ---
 async def check_is_admin(user_id):
     try:
@@ -42,50 +65,56 @@ async def check_is_admin(user_id):
     except:
         return False
 
-# --- ОБРОБКА ПОВІДОМЛЕНЬ У ГРУПІ (ВІД АДМІНІВ) ---
-@dp.message(F.chat.id == int(GROUP_ID))
-async def handle_group_admin_messages(message: Message):
-    # Якщо адмін пише в групу, бот робить це оголошенням
-    if await check_is_admin(message.from_user.id):
-        if message.text:
-            # Видаляємо повідомлення адміна, щоб замінити його ботівським (опціонально)
-            try:
-                await message.delete()
-            except:
-                pass
-            
-            await message.answer(f"📢 <b>Оголошення від адміна:</b>\n\n{message.text}")
-
-# --- ОБРОБКА ПРИВАТНИХ ПОВІДОМЛЕНЬ (АНОНІМКИ) ---
+# --- ОБРОБКА ПРИВАТНИХ ПОВІДОМЛЕНЬ ---
 @dp.message(F.chat.type == ChatType.PRIVATE)
 async def handle_private_messages(message: Message):
     global total_messages
     user_id = message.from_user.id
-    
-    # Реакція на команди меню
+    is_admin = await check_is_admin(user_id)
+
+    # 1. Якщо це команда /start
     if message.text == "/start":
-        is_admin = await check_is_admin(user_id)
-        buttons = [[KeyboardButton(text="📝 Надіслати анонімку")], [KeyboardButton(text="📊 Статистика")]]
-        if is_admin: buttons.append([KeyboardButton(text="🛠 Адмін-панель")])
-        await message.answer("Вітаю в Підслухано!", reply_markup=ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True))
+        await message.answer("Вітаю в Підслухано!", reply_markup=get_main_menu(is_admin))
         return
 
-    # Логіка анонімки (перевірка КД і пересилка)
-    is_admin = await check_is_admin(user_id)
+    # 2. ПЕРЕВІРКА: Якщо текст повідомлення — це назва кнопки, НЕ пересилаємо його
+    if message.text in MENU_BUTTONS:
+        if message.text == "📊 Статистика":
+            await message.answer(f"📈 Надіслано анонімок: <b>{total_messages}</b>")
+        elif message.text == "✨ Підбадьори мене":
+            await message.answer("Ти молодець! Твоя історія змінить чийсь день. ✨")
+        elif message.text == "📜 Правила":
+            await message.answer("Правила прості: будь ввічливим і анонімним. 🤫")
+        elif message.text == "⏳ Мій час":
+            if user_id in user_cooldowns:
+                rem = int((COOLDOWN_SECONDS - (time.time() - user_cooldowns[user_id])) / 60)
+                if rem > 0:
+                    await message.answer(f"⏳ Зачекай ще {rem} хв.")
+                    return
+            await message.answer("✅ Можеш писати!")
+        elif message.text == "🛠 Адмін-панель" and is_admin:
+            # Тут можна додати логіку адмін-панелі
+            await message.answer("🔧 Адмін-панель активована.")
+        return
+
+    # 3. Логіка пересилки анонімки (тільки якщо це не кнопка)
     if not is_admin and user_id in user_cooldowns:
         if time.time() - user_cooldowns[user_id] < COOLDOWN_SECONDS:
-            await message.answer("⏳ Зачекайте!")
+            await message.answer("⏳ Зачекайте, ваш час ще не настав!")
             return
 
     try:
         admin_info = f"\n\n(ID: <code>{user_id}</code>)"
         if message.text:
             await bot.send_message(GROUP_ID, f"📩 <b>Нове анонімне повідомлення:</b>\n\n{message.text}{admin_info}")
-            total_messages += 1
-            if not is_admin: user_cooldowns[user_id] = time.time()
-            await message.answer("✅ Надіслано!")
+        elif message.photo:
+            await bot.send_photo(GROUP_ID, message.photo[-1].file_id, caption=f"📩 <b>Нове фото:</b>{admin_info}")
+        
+        total_messages += 1
+        if not is_admin: user_cooldowns[user_id] = time.time()
+        await message.answer("✅ Надіслано анонімно!")
     except:
-        await message.answer("❌ Помилка.")
+        await message.answer("❌ Помилка відправки.")
 
 async def main():
     threading.Thread(target=run_health_check, daemon=True).start()

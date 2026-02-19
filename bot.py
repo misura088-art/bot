@@ -6,7 +6,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import CommandStart
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, ChatMemberStatus
 from aiogram.client.default import DefaultBotProperties
 
 # --- СЕКЦІЯ ДЛЯ RENDER (HEALTH CHECK) ---
@@ -24,9 +24,9 @@ def run_health_check():
 # --- НАЛАШТУВАННЯ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROUP_ID = os.getenv("GROUP_ID")
-COOLDOWN_SECONDS = 2 * 60 * 60  # 2 години в секундах
+COOLDOWN_SECONDS = 2 * 60 * 60  # 2 години
 
-# Словник для зберігання часу останнього повідомлення: {user_id: timestamp}
+# Словник для кд: {user_id: timestamp}
 user_cooldowns = {}
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -35,7 +35,7 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer("👋 Привіт! Надішли повідомлення, і я передам його в групу **анонімно**.\n\n"
-                         "⚠️ Обмеження: 1 повідомлення на 2 години.")
+                         "⚠️ Обмеження: 1 повідомлення на 2 години (крім адмінів).")
 
 @dp.message()
 async def forward_to_group(message: Message):
@@ -45,8 +45,18 @@ async def forward_to_group(message: Message):
     user_id = message.from_user.id
     current_time = time.time()
 
-    # Перевірка кд
-    if user_id in user_cooldowns:
+    # ПЕРЕВІРКА НА АДМІНІСТРАТОРА
+    is_admin = False
+    try:
+        member = await bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
+        if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR]:
+            is_admin = True
+    except Exception:
+        # Якщо бота немає в групі або він не може перевірити, вважаємо за замовчуванням False
+        is_admin = False
+
+    # Перевірка кд (тільки якщо НЕ адмін)
+    if not is_admin and user_id in user_cooldowns:
         last_time = user_cooldowns[user_id]
         time_passed = current_time - last_time
 
@@ -55,17 +65,19 @@ async def forward_to_group(message: Message):
             await message.answer(f"⏳ Зачекайте ще **{remaining_time} хв.** перед наступним відправленням.")
             return
 
-    # Якщо кд минув або це перше повідомлення
+    # Відправка повідомлення
     try:
         await bot.send_message(
             chat_id=GROUP_ID,
             text=f"📩 **Нове анонімне повідомлення:**\n\n{message.text}"
         )
-        # Оновлюємо час останнього повідомлення
-        user_cooldowns[user_id] = current_time
+        # Оновлюємо час тільки для звичайних користувачів
+        if not is_admin:
+            user_cooldowns[user_id] = current_time
+            
         await message.answer("✅ Ваше повідомлення надіслано анонімно.")
     except Exception as e:
-        await message.answer("❌ Помилка при відправці. Спробуйте пізніше.")
+        await message.answer("❌ Помилка при відправці. Переконайтеся, що бот є в групі.")
 
 async def main():
     threading.Thread(target=run_health_check, daemon=True).start()

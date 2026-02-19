@@ -5,12 +5,12 @@ import time
 import random
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import CommandStart, Command
-from aiogram.enums import ParseMode, ChatMemberStatus
+from aiogram.enums import ParseMode, ChatMemberStatus, ChatType
 from aiogram.client.default import DefaultBotProperties
 
-# --- СЕКЦІЯ ДЛЯ RENDER (HEALTH CHECK) ---
+# --- СЕКЦІЯ ДЛЯ RENDER ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -29,39 +29,12 @@ COOLDOWN_SECONDS = 30 * 60
 
 user_cooldowns = {}
 total_messages = 0
-waiting_for_id = {} # Для відстеження стану адміна
-
-# Списки для рандому
-MOTIVATION = [
-    "Твоя історія варта того, щоб її почули! ✨",
-    "Не тримай це в собі, розкажи нам... 🤫",
-    "Сьогодні чудовий день для зізнань! 📝",
-    "Тут тебе ніхто не засудить. Пиши! 🤝"
-]
+waiting_for_id = {}
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- КЛАВІАТУРИ ---
-def get_main_menu(is_admin=False):
-    buttons = [
-        [KeyboardButton(text="📝 Надіслати анонімку")],
-        [KeyboardButton(text="✨ Підбадьори мене"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="📜 Правила"), KeyboardButton(text="⏳ Мій час")]
-    ]
-    if is_admin:
-        buttons.append([KeyboardButton(text="🛠 Адмін-панель")])
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-admin_menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="🔓 Зняти КД користувачу")],
-        [KeyboardButton(text="🔙 Головне меню")]
-    ],
-    resize_keyboard=True
-)
-
-# --- ФУНКЦІЯ ПЕРЕВІРКИ АДМІНА ---
+# --- ПЕРЕВІРКА АДМІНА ---
 async def check_is_admin(user_id):
     try:
         member = await bot.get_chat_member(chat_id=GROUP_ID, user_id=user_id)
@@ -69,112 +42,50 @@ async def check_is_admin(user_id):
     except:
         return False
 
-# --- ОБРОБНИКИ КОМАНД ---
-
-@dp.message(CommandStart())
-async def start(message: Message):
-    is_admin = await check_is_admin(message.from_user.id)
-    await message.answer(
-        "👋 Вітаємо у боті <b>Підслухано</b>!\nСкористайся меню нижче:",
-        reply_markup=get_main_menu(is_admin)
-    )
-
-@dp.message(F.text == "🛠 Адмін-панель")
-async def admin_panel(message: Message):
+# --- ОБРОБКА ПОВІДОМЛЕНЬ У ГРУПІ (ВІД АДМІНІВ) ---
+@dp.message(F.chat.id == int(GROUP_ID))
+async def handle_group_admin_messages(message: Message):
+    # Якщо адмін пише в групу, бот робить це оголошенням
     if await check_is_admin(message.from_user.id):
-        await message.answer("🔧 Ласкаво просимо в адмін-панель:", reply_markup=admin_menu)
+        if message.text:
+            # Видаляємо повідомлення адміна, щоб замінити його ботівським (опціонально)
+            try:
+                await message.delete()
+            except:
+                pass
+            
+            await message.answer(f"📢 <b>Оголошення від адміна:</b>\n\n{message.text}")
 
-@dp.message(F.text == "🔙 Головне меню")
-async def back_to_main(message: Message):
-    is_admin = await check_is_admin(message.from_user.id)
-    await message.answer("Повертаємось...", reply_markup=get_main_menu(is_admin))
-
-@dp.message(F.text == "🔓 Зняти КД користувачу")
-async def ask_user_id(message: Message):
-    if await check_is_admin(message.from_user.id):
-        waiting_for_id[message.from_user.id] = True
-        await message.answer("Введіть <b>ID користувача</b>, якому потрібно зняти обмеження часі:")
-
-@dp.message(F.text == "📊 Статистика")
-async def stats(message: Message):
-    await message.answer(
-        f"📈 <b>Статистика проекту:</b>\n\n"
-        f"📩 Надіслано анонімок: <b>{total_messages}</b>\n"
-        f"👥 Користувачів у базі КД: <b>{len(user_cooldowns)}</b>"
-    )
-
-@dp.message(F.text == "✨ Підбадьори мене")
-async def inspire(message: Message):
-    await message.answer(random.choice(MOTIVATION))
-
-# --- ЛОГІКА ПЕРЕСИЛАННЯ ТА АДМІН-ДІЙ ---
-
-@dp.message()
-async def handle_all_messages(message: Message):
+# --- ОБРОБКА ПРИВАТНИХ ПОВІДОМЛЕНЬ (АНОНІМКИ) ---
+@dp.message(F.chat.type == ChatType.PRIVATE)
+async def handle_private_messages(message: Message):
     global total_messages
     user_id = message.from_user.id
-
-    # 1. Перевірка, чи це адмін вводить ID для зняття КД
-    if user_id in waiting_for_id:
-        try:
-            target_id = int(message.text)
-            if target_id in user_cooldowns:
-                del user_cooldowns[target_id]
-                await message.answer(f"✅ КД для користувача <code>{target_id}</code> успішно знято!")
-            else:
-                await message.answer("❌ Цього користувача немає в черзі обмежень або він ще нічого не писав.")
-        except ValueError:
-            await message.answer("❌ Будь ласка, введіть коректне число (ID).")
-        
-        del waiting_for_id[user_id]
+    
+    # Реакція на команди меню
+    if message.text == "/start":
+        is_admin = await check_is_admin(user_id)
+        buttons = [[KeyboardButton(text="📝 Надіслати анонімку")], [KeyboardButton(text="📊 Статистика")]]
+        if is_admin: buttons.append([KeyboardButton(text="🛠 Адмін-панель")])
+        await message.answer("Вітаю в Підслухано!", reply_markup=ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True))
         return
 
-    # Ігноруємо кнопки меню
-    if message.text in ["📝 Надіслати анонімку", "📜 Правила", "⏳ Мій час", "✨ Підбадьори мене", "📊 Статистика", "🛠 Адмін-панель", "🔓 Зняти КД користувачу", "🔙 Головне меню"]:
-        if message.text == "📜 Правила":
-            await message.answer("Будьте ввічливими та анонімними! 🤗")
-        elif message.text == "⏳ Мій час":
-            if user_id in user_cooldowns:
-                rem = int((COOLDOWN_SECONDS - (time.time() - user_cooldowns[user_id])) / 60)
-                if rem > 0:
-                    await message.answer(f"⏳ Зачекай ще {rem} хв.")
-                    return
-            await message.answer("✅ Можеш писати!")
-        return
-
-    # 2. Логіка анонімки
+    # Логіка анонімки (перевірка КД і пересилка)
     is_admin = await check_is_admin(user_id)
     if not is_admin and user_id in user_cooldowns:
         if time.time() - user_cooldowns[user_id] < COOLDOWN_SECONDS:
-            rem = int((COOLDOWN_SECONDS - (time.time() - user_cooldowns[user_id])) / 60)
-            await message.answer(f"⏳ Зачекай ще {rem} хв.")
+            await message.answer("⏳ Зачекайте!")
             return
 
     try:
-        # Додаємо ID користувача для адмінів у групі, щоб вони могли його забанити або зняти КД
-        admin_info = f"\n\n(ID для адмінів: <code>{user_id}</code>)"
-        caption = "📩 <b>Нове анонімне повідомлення:</b>"
-        
-        if message.caption: caption += f"\n\n{message.caption}"
-        elif message.text: caption += f"\n\n{message.text}"
-
-        full_text_for_group = caption + admin_info
-
-        if message.photo:
-            await bot.send_photo(GROUP_ID, message.photo[-1].file_id, caption=full_text_for_group)
-        elif message.video:
-            await bot.send_video(GROUP_ID, message.video.file_id, caption=full_text_for_group)
-        elif message.voice:
-            await bot.send_message(GROUP_ID, f"📩 <b>Анонімне голосове:</b>{admin_info}")
-            await bot.send_voice(GROUP_ID, message.voice.file_id)
-        elif message.text:
-            await bot.send_message(GROUP_ID, full_text_for_group)
-
-        total_messages += 1
-        if not is_admin: user_cooldowns[user_id] = time.time()
-        await message.answer("✅ Надіслано анонімно!")
+        admin_info = f"\n\n(ID: <code>{user_id}</code>)"
+        if message.text:
+            await bot.send_message(GROUP_ID, f"📩 <b>Нове анонімне повідомлення:</b>\n\n{message.text}{admin_info}")
+            total_messages += 1
+            if not is_admin: user_cooldowns[user_id] = time.time()
+            await message.answer("✅ Надіслано!")
     except:
-        await message.answer("❌ Помилка відправки.")
+        await message.answer("❌ Помилка.")
 
 async def main():
     threading.Thread(target=run_health_check, daemon=True).start()
